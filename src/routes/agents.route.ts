@@ -56,6 +56,8 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
                   googleCallsWithoutSearchTool: { type: "number" },
                   huggingFaceCalls: { type: "number" },
                   imageCalls: { type: "number" },
+                  googleImageCalls: { type: "number" },
+                  huggingFaceImageCalls: { type: "number" },
                   modelValidationCalls: { type: "number" },
                   // Informational note: limits are configured via env and can be tier-based in future.
                 },

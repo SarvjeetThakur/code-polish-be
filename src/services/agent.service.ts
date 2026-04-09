@@ -9,6 +9,7 @@ type ModelProvider = "GOOGLE" | "HUGGINGFACE" | "GROK";
 const DEFAULT_PROVIDER: ModelProvider = "GOOGLE";
 const DEFAULT_TEXT_MODEL = MODEL_ID;
 const DEFAULT_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
+const HF_IMAGE_MODEL = "Tongyi-MAI/Z-Image-Turbo";
 let googleModelsCache: { names: Set<string>; fetchedAt: number } | null = null;
 
 export type SharedMemory = {
@@ -26,6 +27,8 @@ type UsageStats = {
   googleCallsWithoutSearchTool: number;
   huggingFaceCalls: number;
   imageCalls: number;
+  googleImageCalls: number;
+  huggingFaceImageCalls: number;
   modelValidationCalls: number;
 };
 
@@ -325,18 +328,54 @@ async function generateImageFile(query: string, usage: UsageStats): Promise<stri
     "Style: realistic, detailed, safe content.",
   ].join("\n");
 
-  usage.imageCalls += 1;
-  const response = await ai.models.generateContent({
-    model: DEFAULT_IMAGE_MODEL,
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-  });
+  const isSimplePrompt = query.trim().split(/\s+/).length <= 10;
+  const shouldUseGoogle = isSimplePrompt || !env.HUGGINGFACE_API_KEY;
 
-  const imageBase64 = response.candidates?.[0]?.content?.parts?.find((part) => part.inlineData)?.inlineData?.data;
-  if (!imageBase64) {
-    throw new Error("Image model did not return image data.");
+  usage.imageCalls += 1;
+  if (shouldUseGoogle) {
+    usage.googleImageCalls += 1;
+    const response = await ai.models.generateContent({
+      model: DEFAULT_IMAGE_MODEL,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    });
+
+    const imageBase64 = response.candidates?.[0]?.content?.parts?.find((part) => part.inlineData)?.inlineData
+      ?.data;
+    if (!imageBase64) {
+      throw new Error("Google image model did not return image data.");
+    }
+
+    writeFileSync(filePath, Buffer.from(imageBase64, "base64"));
+    return filePath;
   }
 
-  writeFileSync(filePath, Buffer.from(imageBase64, "base64"));
+  usage.huggingFaceImageCalls += 1;
+  const hfResponse = await fetch(`https://api-inference.huggingface.co/models/${HF_IMAGE_MODEL}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.HUGGINGFACE_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      inputs: prompt,
+      parameters: {
+        width: 1024,
+        height: 1024,
+      },
+    }),
+  });
+
+  if (!hfResponse.ok) {
+    throw new Error(`Hugging Face image generation failed with status ${hfResponse.status}`);
+  }
+
+  const contentType = hfResponse.headers.get("content-type") ?? "";
+  if (!contentType.includes("image")) {
+    throw new Error("Hugging Face image generation did not return image content.");
+  }
+
+  const imageBuffer = Buffer.from(await hfResponse.arrayBuffer());
+  writeFileSync(filePath, imageBuffer);
   return filePath;
 }
 
@@ -376,6 +415,8 @@ export async function runMultiAgentWorkflow(
     googleCallsWithoutSearchTool: 0,
     huggingFaceCalls: 0,
     imageCalls: 0,
+    googleImageCalls: 0,
+    huggingFaceImageCalls: 0,
     modelValidationCalls: 0,
   };
 
